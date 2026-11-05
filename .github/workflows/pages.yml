@@ -1,0 +1,135 @@
+name: Import and deploy portfolio
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import existing portfolio once
+        shell: python
+        run: |
+          import pathlib, urllib.request, urllib.parse, re
+          from html.parser import HTMLParser
+          root = pathlib.Path("site")
+          if (root / "index.html").exists():
+              print("Using portfolio source already committed in this repository.")
+          else:
+              origin = "https://stefano-magistri-dotnet.topjaguar.chatgpt.site/"
+              request = urllib.request.Request(origin, headers={"User-Agent": "PortfolioMigration/1.0"})
+              html = urllib.request.urlopen(request, timeout=60).read().decode("utf-8")
+              required = ["Practical .NET engineering", "enterprise-email-case-study", "installation-shots", "AI Core Apprenticeship"]
+              if not all(x in html for x in required):
+                  raise RuntimeError("The origin did not return the complete portfolio. No import was saved.")
+              class Assets(HTMLParser):
+                  def __init__(self):
+                      super().__init__()
+                      self.paths = set()
+                  def handle_starttag(self, tag, attrs):
+                      a = dict(attrs)
+                      values = [a.get("src", "")]
+                      if tag == "a" and "shot-open" in a.get("class", ""):
+                          values.append(a.get("href", ""))
+                      for value in values:
+                          u = urllib.parse.urlparse(value)
+                          if value and not u.scheme and not u.netloc and not value.startswith("#"):
+                              self.paths.add(u.path.lstrip("/"))
+              assets = Assets()
+              assets.feed(html)
+              root.mkdir(exist_ok=True)
+              for asset in assets.paths:
+                  dest = root / asset
+                  if ".." in pathlib.PurePosixPath(asset).parts:
+                      raise RuntimeError("Unexpected asset path")
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  with urllib.request.urlopen(urllib.parse.urljoin(origin, asset), timeout=60) as response:
+                      dest.write_bytes(response.read())
+              if len(assets.paths) < 10:
+                  raise RuntimeError("Expected all ten portfolio screenshots.")
+              (root / "index.html").write_text(html, encoding="utf-8")
+              (root / ".nojekyll").touch()
+      - name: Install image renderer
+        run: python -m pip install --disable-pip-version-check Pillow
+      - name: Configure social preview
+        shell: python
+        run: |
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFont
+          import re, glob
+          root = Path("site")
+          assets = root / "assets"
+          assets.mkdir(exist_ok=True)
+          im = Image.new("RGB", (1200, 630), "#0b1324")
+          d = ImageDraw.Draw(im)
+          d.rectangle((0, 0, 16, 630), fill="#174fc4")
+          d.rounded_rectangle((925, 100, 1085, 260), radius=28, fill="#172a48", outline="#445773", width=2)
+          fonts = glob.glob("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+          bold = glob.glob("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+          if not fonts or not bold:
+              raise RuntimeError("Required preview fonts unavailable.")
+          def f(size, heavy=False):
+              return ImageFont.truetype((bold if heavy else fonts)[0], size)
+          d.text((80, 65), "STEFANO MAGISTRI", font=f(28, True), fill="#b3c1d9")
+          d.text((80, 170), "Practical .NET", font=f(66, True), fill="#edf3ff")
+          d.text((80, 250), "engineering.", font=f(66, True), fill="#9bbfff")
+          d.text((80, 395), "Senior/Lead .NET Developer & Analyst", font=f(31), fill="#edf3ff")
+          d.line((80, 475, 1120, 475), fill="#445773", width=2)
+          d.text((80, 510), "Enterprise applications  /  Legacy modernisation", font=f(24), fill="#b3c1d9")
+          d.text((954, 150), "{ }", font=f(48, True), fill="#9bbfff")
+          im.save(assets / "stefano-magistri-social-v1.png", optimize=True)
+          url = "https://stefano-magistri.github.io/"
+          title = "Stefano Magistri | Practical .NET engineering."
+          description = "Senior/Lead .NET Developer & Analyst specialising in enterprise applications, legacy modernisation and practical .NET engineering."
+          image = url + "assets/stefano-magistri-social-v1.png"
+          html = (root / "index.html").read_text(encoding="utf-8")
+          html = re.sub(r'<meta\b[^>]*(?:property|name)=["\x27](?:og:|twitter:)[^>]*>', '', html, flags=re.I)
+          html = re.sub(r'<link\b[^>]*rel=["\x27]canonical["\x27][^>]*>', '', html, flags=re.I)
+          meta = (
+              '<link rel="canonical" href="' + url + '">'
+              '<meta property="og:type" content="website">'
+              '<meta property="og:url" content="' + url + '">'
+              '<meta property="og:site_name" content="Stefano Magistri">'
+              '<meta property="og:title" content="' + title + '">'
+              '<meta property="og:description" content="' + description + '">'
+              '<meta property="og:image" content="' + image + '">'
+              '<meta property="og:image:secure_url" content="' + image + '">'
+              '<meta property="og:image:type" content="image/png">'
+              '<meta property="og:image:width" content="1200">'
+              '<meta property="og:image:height" content="630">'
+              '<meta property="og:image:alt" content="Stefano Magistri. Practical .NET engineering. Senior/Lead .NET Developer &amp; Analyst.">'
+              '<meta name="twitter:card" content="summary_large_image">'
+              '<meta name="twitter:title" content="' + title + '">'
+              '<meta name="twitter:description" content="' + description + '">'
+              '<meta name="twitter:image" content="' + image + '">'
+              '<meta name="twitter:image:alt" content="Stefano Magistri — Practical .NET engineering.">'
+          )
+          html = html.replace("</head>", meta + "</head>")
+          (root / "index.html").write_text(html, encoding="utf-8")
+      - name: Save imported source and preview
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site
+          if ! git diff --cached --quiet; then
+            git commit -m "Import portfolio and configure branded social preview"
+            git push
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
