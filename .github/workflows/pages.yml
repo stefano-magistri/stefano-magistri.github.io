@@ -44,17 +44,19 @@ jobs:
                           values.append(a.get("href", ""))
                       for value in values:
                           u = urllib.parse.urlparse(value)
-                          if value and not u.scheme and not u.netloc and not value.startswith("#"):
+                          if value and not u.scheme and not u.netloc and u.path.lstrip("/").startswith("assets/"):
                               self.paths.add(u.path.lstrip("/"))
               assets = Assets()
               assets.feed(html)
               root.mkdir(exist_ok=True)
-              for asset in assets.paths:
+              for asset in sorted(assets.paths):
                   dest = root / asset
                   if ".." in pathlib.PurePosixPath(asset).parts:
                       raise RuntimeError("Unexpected asset path")
                   dest.parent.mkdir(parents=True, exist_ok=True)
-                  with urllib.request.urlopen(urllib.parse.urljoin(origin, asset), timeout=60) as response:
+                  print("Importing portfolio asset:", asset, flush=True)
+                  asset_request = urllib.request.Request(urllib.parse.urljoin(origin, asset), headers={"User-Agent": "PortfolioMigration/1.0", "Referer": origin})
+                  with urllib.request.urlopen(asset_request, timeout=60) as response:
                       dest.write_bytes(response.read())
               if len(assets.paths) < 10:
                   raise RuntimeError("Expected all ten portfolio screenshots.")
