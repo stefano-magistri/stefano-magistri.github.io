@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://stefano-magistri.github.io/sitemap.xml
